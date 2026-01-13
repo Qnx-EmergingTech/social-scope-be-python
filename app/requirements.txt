@@ -1,0 +1,12 @@
+fastapi==0.125.0
+httpx==0.28.1
+python-dotenv==1.2.1
+sqlalchemy[asyncio]
+asyncpg==0.31.0
+openai
+
+
+uvicorn[standard]
+psycopg2-binary==2.9.11
+celery[redis]
+redis
