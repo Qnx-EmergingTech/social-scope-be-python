@@ -31,11 +31,12 @@ services:
   worker:
     build: .
     container_name: social_scope_worker
-    command: celery -A app.celery_app.celery_app worker --loglevel=info
+    working_dir: /app
     volumes:
       - .:/app
     env_file:
       - .env
+    command: celery -A celery_app.celery_app worker --loglevel=info
     depends_on:
       - redis
 
