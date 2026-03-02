@@ -3,7 +3,6 @@ from fastapi import APIRouter, Query, Depends, HTTPException
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from services import facebook_services, openai_services
-from tasks.save_to_db import long_task
 import os
 import httpx
 from core.database import DATABASE_URL, Base, get_db,engine, AsyncSession
@@ -102,6 +101,17 @@ async def get_all_page_comments(page_id: str = Query(..., description="Facebook 
     suggestions = await openai_services.get_suggestion(response)
     topper_comments = await openai_services.get_topper(response)
 
+
+
+
+    #Get Post_Comments
+
+    # Test with Bulk Insert for better performance use Python Lists to temporarily store the comments and then insert them into the database in one go. This can significantly reduce the number of database transactions and improve performance.
+    # Time <= logic for each comment and insert into DB
+    # Web Socket Notification to say that background task is completed.
+
+
+
     for comment in response:
         db_comment = PageComment(
             comment_id=comment["comment_id"],
@@ -116,19 +126,12 @@ async def get_all_page_comments(page_id: str = Query(..., description="Facebook 
         "comments": response, 
         "facebook": profile.json(), 
         "follower": profile.json().get("fan_count", None),
-        #"url": profile.json()["picture"]["data"]["url"],
+        "url": profile.json()["picture"]["data"]["url"],
         "comment_sentiments": comment_sentiments,
         "suggestions": suggestions,
         "topper_comments": topper_comments
         }     
 
-<<<<<<< HEAD
 
 
    
-=======
-@router.get("/run-sync-db", summary="Synchronize facebook data with the database")
-async def run_sync_db():
-    task = long_task.delay(name="testing")
-    return {"message": "Data synchronization started. Check Celery worker logs for progress.","task_id": task.id}
->>>>>>> upstream/main
