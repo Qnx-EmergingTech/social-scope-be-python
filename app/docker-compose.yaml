@@ -38,7 +38,7 @@ services:
       - .env
     environment:
     - PYTHONPATH=/app
-    command: celery -A celery_app.celery_app worker --loglevel=info --pool=solo
+    command: celery -A celery_app.celery_app worker --loglevel=info 
     depends_on:
       - redis
 
