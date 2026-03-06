@@ -1,4 +1,5 @@
 import asyncio
+from core.database_celery_sync import SessionLocal
 from celery.utils.log import get_task_logger
 from celery_app import celery_app
 from sqlalchemy import select, desc
@@ -6,30 +7,26 @@ from sqlalchemy.dialects.postgresql import insert
 from datetime import datetime
 import os
 from DBmodels.CommentModel import PageComment
-from core.database import AsyncSessionLocal
 from services import facebook_services, openai_services 
+
 logger = get_task_logger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=3)
-def long_task(self, page_id: str, interval: int = 60):
+def long_task(self, page_id: str):
+    db = SessionLocal()
     try:
-        async def runner():
-            while True:
-                await _process(page_id)
-                await asyncio.sleep(interval)
-
-        # Run async loop inside Celery
-        asyncio.run(runner())
+        asyncio.run(_process(page_id, db))
+        logger.info(f"Task completed for page_id: {page_id}")
 
     except Exception as e:
-        logger.error(f"Task failed: {e}")
+        db.rollback()
         raise self.retry(exc=e, countdown=5)
+
+    finally:
+        db.close()
     
-async def _process(page_id: str):
-    async with AsyncSessionLocal() as db:
-    
-        
+async def _process(page_id: str, db):       
         page_access_token = await facebook_services.get_page_token(page_id, os.getenv("USER_ACCESS_TOKEN"))
         profile = await facebook_services.get_profile(page_id, page_access_token.json().get("access_token",None))
         response = await facebook_services.get_all_comments(page_id, page_access_token.json().get("access_token",None))
@@ -43,7 +40,7 @@ async def _process(page_id: str):
         ###Database
         latest_comment_stmt = select(PageComment).order_by(desc(PageComment.created_time)).limit(1)
         print("Success Checkpoint latest comment stmt")
-        result = await db.execute(latest_comment_stmt)
+        result = db.execute(latest_comment_stmt)
         print("Success Checkpoint latest comment result")
         latest_comment = result.scalar_one_or_none()
         print("Success Checkpoint latest comment result scalar")
@@ -66,7 +63,7 @@ async def _process(page_id: str):
                 "message": c["message"],
                 "created_time": datetime.strptime(
                 c["created_time"], "%Y-%m-%dT%H:%M:%S%z"
-                )
+                ).replace(tzinfo=None)
             }
             for c in response
         ]
@@ -92,8 +89,8 @@ async def _process(page_id: str):
         if formatted_comments:
             stmt = insert(PageComment).values(formatted_comments) 
             stmt = stmt.on_conflict_do_nothing(index_elements=['comment_id'])
-            await db.execute(stmt)
-            await db.commit()
+            db.execute(stmt)
+            db.commit()
         
         logger.info("Task completed successfully")
 
