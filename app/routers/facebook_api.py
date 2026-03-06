@@ -1,13 +1,26 @@
-from fastapi import APIRouter, Query
+import asyncio
+from sqlalchemy import desc, select
+from sqlalchemy.dialects.postgresql import insert
+from DBmodels.CommentModel import PageComment
+from fastapi import APIRouter, Query, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from services import facebook_services, openai_services
-from tasks.save_to_db import long_task
 import os
 import httpx
+from core.database import DATABASE_URL, Base, get_db,engine, AsyncSession
+from datetime import datetime
+from tasks.save_to_db import long_task
+
 
 load_dotenv() 
 router = APIRouter()
+
+async def startup_event():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
 
 #load environment variables
 FACEBOOK_APP_ID = os.getenv("FACEBOOK_APP_ID")
@@ -36,8 +49,25 @@ class FacebookPagePostDetails(BaseModel):
     permalink_url: str
     created_time: str
 
+
 class FacebookPagePostListResponse(BaseModel):
     page_posts: list[FacebookPagePostDetails]
+
+class FacebookCommentDetails(BaseModel):
+    id: str
+    message: str
+    from_user: dict = Field(alias="from")
+    created_time: str
+
+## THE DB MODEL ##
+class FacebookCommentDatabase(BaseModel):
+    comment_id: str
+    message: str
+    created_time: str
+  
+
+class FacebookCommentListResponse(BaseModel):
+    post_comments: list[FacebookCommentDetails]
 
 
 @router.get("/exchange-token", response_model=FacebookTokenResponse, summary="Exchange short-lived Facebook token for long-lived token",)
@@ -55,32 +85,28 @@ async def get_page_posts(page_access_token: str = Query(..., description="Page a
     response = await facebook_services.post_page_list(page_id, page_access_token)
     return {"page_posts": response.json().get("data", [])}
 
-@router.get("/get-post-comments", summary="Get Facebook post comments", response_model=FacebookPagePostDetails)
+@router.get("/get-post-comments", summary="Get Facebook post comments", response_model=FacebookCommentListResponse)
 async def get_post_comments(post_id: str = Query(..., description="Facebook Post ID"), page_access_token: str = Query(..., description="Page access token")):
     response = await facebook_services.get_post_comments(post_id, page_access_token)
     return {"post_comments": response.json().get("data", [])}
 
-@router.get("/get-all-page-comments", summary="Get all comments from a Facebook page")
-async def get_all_page_comments(page_id: str = Query(..., description="Facebook Page ID")):
+@router.get("/get-all-page-comments")
+async def get_all_page_comments(page_id: str):
+    """
+    Triggers background processing of Facebook comments.
+    Returns immediately with Celery task_id.
+    """
+    task = long_task.delay(page_id)
+    return {"message": "Processing started", "task_id": task.id}
 
-    page_access_token = await facebook_services.get_page_token(page_id, os.getenv("USER_ACCESS_TOKEN"))
-    profile = await facebook_services.get_profile(page_id, page_access_token.json().get("access_token",None))
-    response = await facebook_services.get_all_comments(page_id, page_access_token.json().get("access_token",None))
-    comment_sentiments = await  openai_services.get_comment_sentiments(response)
-    suggestions = await openai_services.get_suggestion(response)
-    topper_comments = await openai_services.get_topper(response)
+#For testing purposes only, to check if the comments are being saved in the database and can be retrieved successfully. REMOVE PAGKATPOS
+@router.get("/comments")
+async def get_comments(limit: int = 100, db: AsyncSession = Depends(get_db)):
+    stmt = select(PageComment).order_by(PageComment.created_time.desc()).limit(limit)
+    result = await db.execute(stmt)
+    comments = result.scalars().all()
+    
 
-    return {
-        "comments": response, 
-        "facebook": profile.json(), 
-        "follower": profile.json().get("fan_count", None),
-        #"url": profile.json()["picture"]["data"]["url"],
-        "comment_sentiments": comment_sentiments,
-        "suggestions": suggestions,
-        "topper_comments": topper_comments
-        }     
+    return {"count": len(comments), "comments": comments}
 
-@router.get("/run-sync-db", summary="Synchronize facebook data with the database")
-async def run_sync_db():
-    task = long_task.delay(name="testing")
-    return {"message": "Data synchronization started. Check Celery worker logs for progress.","task_id": task.id}
+
