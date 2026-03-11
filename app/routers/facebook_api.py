@@ -90,14 +90,33 @@ async def get_post_comments(post_id: str = Query(..., description="Facebook Post
     response = await facebook_services.get_post_comments(post_id, page_access_token)
     return {"post_comments": response.json().get("data", [])}
 
-@router.get("/get-all-page-comments")
+
+@router.get("/get-all-page-comments", summary="Get all comments from a Facebook page")
+async def get_all_page_comments(page_id: str = Query(..., description="Facebook Page ID")):
+
+    page_access_token = await facebook_services.get_page_token(page_id, os.getenv("USER_ACCESS_TOKEN"))
+    profile = await facebook_services.get_profile(page_id, page_access_token.json().get("access_token",None))
+    response = await facebook_services.get_all_comments(page_id, page_access_token.json().get("access_token",None))
+    comment_sentiments = await  openai_services.get_comment_sentiments(response)
+    suggestions = await openai_services.get_suggestion(response)
+    topper_comments = await openai_services.get_topper(response)
+
+    return {
+        "comments": response, 
+        "facebook": profile.json(), 
+        "follower": profile.json().get("fan_count", None),
+        #"url": profile.json()["picture"]["data"]["url"],
+        "comment_sentiments": comment_sentiments,
+        "suggestions": suggestions,
+        "topper_comments": topper_comments
+        }     
+
+
+@router.get("/comments-push-to-DB")
 async def get_all_page_comments(page_id: str):
-    """
-    Triggers background processing of Facebook comments.
-    Returns immediately with Celery task_id.
-    """
     task = long_task.delay(page_id)
     return {"message": "Processing started", "task_id": task.id}
+#need to display the comment and analysis
 
 #For testing purposes only, to check if the comments are being saved in the database and can be retrieved successfully. REMOVE PAGKATPOS
 @router.get("/comments")

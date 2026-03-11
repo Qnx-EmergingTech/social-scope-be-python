@@ -4,43 +4,33 @@ import asyncio
 from DBmodels.CommentModel import PageComment
 from core.database_celery_sync import SessionLocal
 from sqlalchemy import select, desc
+import redis
+import json
 
 router = APIRouter()
+redisNotify = redis.Redis(host="redis",port=6379, db=0)
 
-# Track notified comment IDs globally in this connection
 connections = []
 
-@router.websocket("/notifications")
-async def websocket_notifications(ws: WebSocket, page_id: str = None, page_access_token: str = None):
+@router.websocket("/notifications-comments")
+async def websocket_notifications(ws: WebSocket):
     await ws.accept()
     print("CONNECTED")
 
-    notified_comments = set()  # keeps track of already sent comment IDs
+    
+    pubsub = redisNotify.pubsub() 
+    pubsub.subscribe("new_comments")
 
     try:
         while True:
-            # create a fresh session each loop to avoid caching issues
-            db = SessionLocal()
+            message = pubsub.get_message(ignore_subscribe_messages=True)
+            if message: 
+                data = json.loads(message["data"]) 
+                await ws.send_text( f"New message: {data}" )
+            else:
+                await ws.send_text(f"No new Comments")
+        
 
-                
-            latest_comment_stmt = select(PageComment).order_by(desc(PageComment.created_time)).limit(1)
-            result = db.execute(latest_comment_stmt)
-            latest_comment = result.scalars().all()
-
-            new_message_sent = False
-
-            # iterate oldest first
-            for comment in reversed(latest_comment):
-                if comment.comment_id not in notified_comments:
-                    text = f"New message: {comment.message} | Posted at: {comment.created_time}"
-                    await ws.send_text(text)
-                    notified_comments.add(comment.comment_id)
-                    new_message_sent = True
-
-            if not new_message_sent:
-                await ws.send_text(f"No new messages. Last checked at {datetime.utcnow().isoformat()}")
-
-            db.close()
             await asyncio.sleep(5)
 
     except Exception as e:

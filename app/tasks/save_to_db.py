@@ -8,9 +8,11 @@ from datetime import datetime
 import os
 from DBmodels.CommentModel import PageComment
 from services import facebook_services, openai_services 
+import redis
+import json
 
 logger = get_task_logger(__name__)
-
+redis = redis.Redis(host="redis",port=6379, db=0)
 
 @celery_app.task(bind=True, max_retries=3)
 def long_task(self, page_id: str):
@@ -31,7 +33,7 @@ async def _process(page_id: str, db):
         profile = await facebook_services.get_profile(page_id, page_access_token.json().get("access_token",None))
         response = await facebook_services.get_all_comments(page_id, page_access_token.json().get("access_token",None))
 
-        """ DO NOT REMOVE!"""
+        """ DO NOT REMOVE! COMMENTED """
         #comment_sentiments = await  openai_services.get_comment_sentiments(response)
         #suggestions = await openai_services.get_suggestion(response)
         #topper_comments = await openai_services.get_topper(response)
@@ -83,7 +85,7 @@ async def _process(page_id: str, db):
         print("Success Checkpoint 4")
         print(f"this is the comments to be pushed: {formatted_comments}")
         #pangcheck ko lang if tama yung latest comment
-        
+
         if latest_comment is not None:
             print(f"this is the latest comment: {latest_comment.message}")
         else:
@@ -93,6 +95,15 @@ async def _process(page_id: str, db):
             stmt = stmt.on_conflict_do_nothing(index_elements=['comment_id'])
             db.execute(stmt)
             db.commit()
-        
         logger.info("Task completed successfully")
 
+        
+        redis.publish(
+                "new_comments",
+                json.dumps(latest_comment.message)
+                )
+        print("Successful push to Redis")
+        
+        print(f"this is formatted comments: {formatted_comments}")
+
+      
