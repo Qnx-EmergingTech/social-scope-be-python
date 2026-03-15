@@ -1,6 +1,10 @@
+from sqlite3 import IntegrityError
+from DBmodels.CommentModel import PageComment
 from dotenv import load_dotenv
 import os
 import httpx
+from datetime import datetime
+from sqlalchemy.orm import Session
 
 load_dotenv() 
 
@@ -60,45 +64,6 @@ async def get_page_token(page_id: str, user_access_token: str) -> dict:
         }
         response = await client.get(url, params=params)
         return response
-    
-async def get_all_comments(page_id: str, page_access_token: str) -> list[str]:
-    all_comment_texts = []
-    
-    async with httpx.AsyncClient() as client:
-        # Initial call: getting feed but focusing only on the comments field
-        feed_url = f"{FACEBOOK_URL}/{page_id}/feed"
-        feed_params = {
-            "access_token": page_access_token,
-            # We only request 'comments' and specify we want 'message' and 'limit'
-            "fields": "comments.limit(100){message}",
-            "limit": 100 
-        }
-
-        while feed_url:
-            response = await client.get(feed_url, params=feed_params)
-            data = response.json()
-            
-            # 1. Loop through each post returned in the feed
-            for post in data.get("data", []):
-                if "comments" in post:
-                    comment_block = post["comments"]
-                    
-                    # 2. Extract messages from the current batch of comments
-                    all_comment_texts.extend([c["message"] for c in comment_block.get("data", []) if "message" in c])
-                    
-                    # 3. Handle pagination for comments on THIS specific post
-                    next_comments_url = comment_block.get("paging", {}).get("next")
-                    while next_comments_url:
-                        c_res = await client.get(next_comments_url)
-                        c_data = c_res.json()
-                        all_comment_texts.extend([c["message"] for c in c_data.get("data", []) if "message" in c])
-                        next_comments_url = c_data.get("paging", {}).get("next")
-
-            # 4. Move to the next page of posts
-            feed_url = data.get("paging", {}).get("next")
-            feed_params = {} # Clear params as they are already in the 'next' URL
-    
-    return all_comment_texts
 
 async def get_profile (page_id: str, page_access_token: str) -> dict:
     async with httpx.AsyncClient() as client:
@@ -109,3 +74,52 @@ async def get_profile (page_id: str, page_access_token: str) -> dict:
         }
         response = await client.get(url, params=params)
         return response
+    
+
+        #######################################################################
+
+async def get_all_comments(page_id: str, page_access_token: str) -> list[dict]:
+    all_comments = []
+
+    async with httpx.AsyncClient() as client:
+        feed_url = f"{FACEBOOK_URL}/{page_id}/feed"
+        feed_params = {
+            "access_token": page_access_token,
+            "fields": "comments.limit(100){id,message,created_time}",
+            "limit": 100
+        }
+
+        while feed_url:
+            response = await client.get(feed_url, params=feed_params)
+            data = response.json()
+
+            for post in data.get("data", []):
+                if "comments" in post:
+                    comment_block = post["comments"]
+
+                    # Extract structured data for this batch
+                    for c in comment_block.get("data", []):
+                        all_comments.append({
+                            "comment_id": c.get("id"),
+                            "message": c.get("message"),
+                            "created_time": c.get("created_time")
+                        })
+
+                    # Handle pagination for comments on this post
+                    next_comments_url = comment_block.get("paging", {}).get("next")
+                    while next_comments_url:
+                        c_res = await client.get(next_comments_url)
+                        c_data = c_res.json()
+                        for c in c_data.get("data", []):
+                            all_comments.append({
+                                "comment_id": c.get("id"),
+                                "message": c.get("message"),
+                                "created_time": c.get("created_time")
+                            })
+                        next_comments_url = c_data.get("paging", {}).get("next")
+
+            # Move to the next page of posts
+            feed_url = data.get("paging", {}).get("next")
+            feed_params = {}
+
+    return all_comments
